@@ -52,8 +52,8 @@ const KICK_I = {
 const LOCK_DELAY = 0.5, LOCK_RESETS = 15, CLEAR_T = 0.34;
 const DAS = 0.17, ARR = 0.018;
 function gravityInterval(level) {
-  const l = Math.max(1, level);
-  return Math.pow(0.8 - (l - 1) * 0.007, l - 1);
+  const l = Math.min(115, Math.max(1, level));   // beyond this the curve would sign-flip
+  return Math.max(1 / 60, Math.pow(0.8 - (l - 1) * 0.007, l - 1));
 }
 
 let G = null;
@@ -89,8 +89,8 @@ function cellsOf(kind, rot, x, y) {
 }
 function fits(kind, rot, x, y) {
   for (const [bx, by] of cellsOf(kind, rot, x, y)) {
-    if (bx < 0 || bx >= W || by >= H) return false;
-    if (by >= 0 && G.board[by * W + bx]) return false;
+    if (bx < 0 || bx >= W || by >= H || by < 0) return false;  // nothing may leave the well
+    if (G.board[by * W + bx]) return false;
   }
   return true;
 }
@@ -167,6 +167,7 @@ function holdPiece() {
     G.gTimer = 0; G.lockT = 0; G.lockResets = 0; G.grounded = false;
     if (!fits(swap, 0, 3, 1)) { G.piece = null; topOut(); }
   } else spawnNext();
+  G.lastWasRotate = false;
   G.holdUsed = true;
   return true;
 }
@@ -190,7 +191,7 @@ function lockPiece() {
   const spin = detectTSpin(p);
   let allHidden = true;
   for (const [bx, by] of cellsOf(p.kind, p.rot, p.x, p.y)) {
-    if (by >= 0) G.board[by * W + bx] = p.kind;
+    G.board[by * W + bx] = p.kind;
     if (by >= HIDDEN) allHidden = false;
   }
   G.pieces++;
@@ -277,12 +278,12 @@ function scoreClear(n, spin, rows) {
       col: n === 4 ? '#ffe14a' : spin ? '#c86bff' : '#3ef0ff' };
     if (rows && rows.length) G.fx.push({ pop: '+' + G.lastPoints, x: W / 2, y: rows[rows.length - 1], t: G.time, col: '#ffffff' });
     G.statLine = label;
-  } else if (spin) {
-    G.b2b = true;
-    G.lastPoints = G.score - scoreBefore;
-    if (label) G.banner = { txt: label, t: G.time, pts: G.lastPoints, big: true, col: '#b23dff' };
-  } else if (n === 0) {
-    G.combo = -1;
+  } else {
+    G.combo = -1;                        // any lock that clears nothing breaks the chain
+    if (spin) {                          // ...and a spin without lines does not arm back-to-back
+      G.lastPoints = G.score - scoreBefore;
+      if (label) G.banner = { txt: label, t: G.time, pts: G.lastPoints, big: true, col: '#b23dff' };
+    }
   }
 }
 function resolveClear() {
@@ -314,7 +315,8 @@ function tick(dt) {
       while (G.das.arr >= ARR) { G.das.arr -= ARR; if (!move(G.das.dir)) break; }
     }
   }
-  const gi = G.softing ? Math.min(gravityInterval(G.level), 0.02) : gravityInterval(G.level);
+  const nat = gravityInterval(G.level);
+  const gi = G.softing ? nat / 20 : nat;   // Guideline soft drop is 20x natural gravity
   G.gTimer += dt;
   while (G.gTimer >= gi) {
     G.gTimer -= gi;
@@ -419,19 +421,22 @@ function setRows(spec) { // spec: array of [y, 'xxx.xxxxxx'] where x = filled
   for (const [y, s] of spec)
     for (let x = 0; x < W; x++) G.board[y * W + x] = s[x] === 'x' ? 'I' : null;
 }
-// shots only: repaint a staged stack in plausible piece colours (render-side hash, never the sim)
+// shots only: an authored stack is coloured as a mixed-piece stack would be, and the
+// position is flagged so no capture can pass hand-built state off as play
 function dress() {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * W + x;
     if (G.board[i]) G.board[i] = KINDS[Math.floor(hash32(x, y, 3) * 7)];
   }
+  G.staged = true;
 }
 function runVerify(mode) {
   const CAP = 400;
   if (mode === 'solution') {
     newGame(RUN_SEED, { headless: true });
     const r = runStack({}, CAP);
-    report(mode, !r.over && r.lines > 100 ? 'SURVIVED' : 'TOPPED-OUT', r);
+    const pass = !r.over && r.lines > 100;
+    report(mode, pass ? 'PASS' : 'FAIL', Object.assign({ claim: 'bot survives 400 pieces, >100 lines', result: r.over ? 'TOPPED-OUT' : 'SURVIVED' }, r));
   } else if (mode === 'solution-seeds') {
     let ok = 0, nul = 0; const rows = [];
     for (let i = 0; i < 10; i++) {
@@ -444,23 +449,23 @@ function runVerify(mode) {
       if (!nr.over) nul++;
       rows.push(sd + ':' + (r.over ? 'X' : 'S') + r.lines + ':' + (nr.over ? 'X' : 'S') + nr.survived);
     }
-    report(mode, ok === 10 && nul === 0 ? 'SOLVED' : 'FAILED', { botSurvived: ok, nullSurvived: nul, of: 10, runs: rows.join(' ') });
+    report(mode, ok === 10 && nul === 0 ? 'PASS' : 'FAIL', { botSurvived: ok, nullSurvived: nul, of: 10, runs: rows.join(' ') });
   } else if (mode === 'null') {
     newGame(RUN_SEED, { headless: true });
     const r = runStack({ idle: true }, CAP);
-    report(mode, r.over ? 'TOPPED-OUT' : 'SURVIVED', r);
+    report(mode, r.over ? 'PASS' : 'FAIL', Object.assign({ claim: 'a player who never steers must top out', result: r.over ? 'TOPPED-OUT' : 'SURVIVED' }, r));
   } else if (mode === 'ablate-rotation') {
     newGame(RUN_SEED, { headless: true });
     const r = runStack({ noRotate: true }, CAP);
-    report(mode, r.over ? 'TOPPED-OUT' : 'SURVIVED', r);
+    report(mode, r.over ? 'PASS' : 'FAIL', Object.assign({ claim: 'sliding without rotating must top out', result: r.over ? 'TOPPED-OUT' : 'SURVIVED' }, r));
   } else if (mode === 'ablate-holes') {
     newGame(RUN_SEED, { headless: true });
     const r = runStack({ weights: Object.assign({}, WEIGHTS, { holes: 0 }) }, CAP);
-    report(mode, r.over ? 'TOPPED-OUT' : 'SURVIVED', r);
+    report(mode, r.over ? 'PASS' : 'FAIL', Object.assign({ claim: 'ignoring buried holes must top out', result: r.over ? 'TOPPED-OUT' : 'SURVIVED' }, r));
   } else if (mode === 'ablate-height') {
     newGame(RUN_SEED, { headless: true });
     const r = runStack({ weights: Object.assign({}, WEIGHTS, { height: 0, bumps: 0 }) }, CAP);
-    report(mode, r.over ? 'TOPPED-OUT' : 'SURVIVED', r);
+    report(mode, r.over ? 'PASS' : 'FAIL', Object.assign({ claim: 'ignoring height and bumpiness must top out', result: r.over ? 'TOPPED-OUT' : 'SURVIVED' }, r));
   } else if (mode === 'debug-sim') {
     newGame(RUN_SEED, { headless: false });
     simRun(70);
@@ -475,7 +480,7 @@ function runVerify(mode) {
       const set = new Set(seen.slice(i, i + 7));
       if (set.size !== 7) { ok = false; dupBag = i / 7; break; }
     }
-    report(mode, ok ? 'SOLVED' : 'FAILED', { bagsChecked: 100, firstBadBag: dupBag, sample: seen.slice(0, 14).join('') });
+    report(mode, ok ? 'PASS' : 'FAIL', { bagsChecked: 100, firstBadBag: dupBag, sample: seen.slice(0, 14).join('') });
   } else if (mode === 'mech-srs') {
     // a J flush against the left wall cannot rotate in place — SRS kicks it inward
     blank();
@@ -483,8 +488,216 @@ function runVerify(mode) {
     const naive = fits('J', 0, -1, 5);
     const kicked = rotate(-1);
     const dx = G.piece.x - (-1);
-    report(mode, !naive && kicked && dx === 1 && G.lastKick === 1 ? 'SOLVED' : 'FAILED',
+    report(mode, !naive && kicked && dx === 1 && G.lastKick === 1 ? 'PASS' : 'FAIL',
       { naiveRotationFits: naive, kickedRotation: kicked, kickIndex: G.lastKick, dx: dx });
+  } else if (mode === 'mech-shapes') {
+    // the canonical SRS states, drawn here as grids and compared to the tables the game uses
+    const GRID = {
+      I: ['....|XXXX|....|....', '..X.|..X.|..X.|..X.', '....|....|XXXX|....', '.X..|.X..|.X..|.X..'],
+      J: ['X..|XXX|...', '.XX|.X.|.X.', '...|XXX|..X', '.X.|.X.|XX.'],
+      L: ['..X|XXX|...', '.X.|.X.|.XX', '...|XXX|X..', 'XX.|.X.|.X.'],
+      O: ['.XX|.XX|...', '.XX|.XX|...', '.XX|.XX|...', '.XX|.XX|...'],
+      S: ['.XX|XX.|...', '.X.|.XX|..X', '...|.XX|XX.', 'X..|XX.|.X.'],
+      T: ['.X.|XXX|...', '.X.|.XX|.X.', '...|XXX|.X.', '.X.|XX.|.X.'],
+      Z: ['XX.|.XX|...', '..X|.XX|.X.', '...|XX.|.XX', '.X.|XX.|X..'],
+    };
+    let bad = '', checked = 0;
+    for (const k of KINDS) for (let r = 0; r < 4; r++) {
+      const want = new Set();
+      const lines = GRID[k][r].split('|');
+      for (let y = 0; y < lines.length; y++)
+        for (let x = 0; x < lines[y].length; x++)
+          if (lines[y][x] === 'X') want.add(x + ',' + y);
+      const got = new Set(SHAPES[k][r].map(c => c[0] + ',' + c[1]));
+      checked++;
+      if (got.size !== 4 || want.size !== 4) { bad = bad || (k + r + ':size'); continue; }
+      for (const cell of want) if (!got.has(cell)) { bad = bad || (k + r + ':' + cell); break; }
+    }
+    // and no two pieces may share a spawn shape
+    const spawns = KINDS.map(k => JSON.stringify(SHAPES[k][0].map(c => c.join(',')).sort()));
+    const allDistinct = new Set(spawns).size === 7;
+    report(mode, !bad && checked === 28 && allDistinct ? 'PASS' : 'FAIL',
+      { statesChecked: checked, firstMismatch: bad || 'none', sevenDistinctSpawns: allDistinct });
+  } else if (mode === 'mech-srs-table') {
+    // the canonical Guideline tables, typed here y-UP, negated in the comparison.
+    const YUP = {
+      '01': [[0, 0], [-1, 0], [-1, 1], [0, -2], [-1, -2]],
+      '10': [[0, 0], [1, 0], [1, -1], [0, 2], [1, 2]],
+      '12': [[0, 0], [1, 0], [1, -1], [0, 2], [1, 2]],
+      '21': [[0, 0], [-1, 0], [-1, 1], [0, -2], [-1, -2]],
+      '23': [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]],
+      '32': [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
+      '30': [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
+      '03': [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]],
+    };
+    const YUP_I = {
+      '01': [[0, 0], [-2, 0], [1, 0], [-2, -1], [1, 2]],
+      '10': [[0, 0], [2, 0], [-1, 0], [2, 1], [-1, -2]],
+      '12': [[0, 0], [-1, 0], [2, 0], [-1, 2], [2, -1]],
+      '21': [[0, 0], [1, 0], [-2, 0], [1, -2], [-2, 1]],
+      '23': [[0, 0], [2, 0], [-1, 0], [2, 1], [-1, -2]],
+      '32': [[0, 0], [-2, 0], [1, 0], [-2, -1], [1, 2]],
+      '30': [[0, 0], [1, 0], [-2, 0], [1, -2], [-2, 1]],
+      '03': [[0, 0], [-1, 0], [2, 0], [-1, 2], [2, -1]],
+    };
+    let checked = 0, bad = '';
+    const cmp = (mine, canon) => {
+      for (const k in canon) {
+        for (let i = 0; i < 5; i++) {
+          checked++;
+          const a = mine[k] && mine[k][i], b = canon[k][i];
+          if (!a || a[0] !== b[0] || a[1] !== -b[1]) { bad = bad || (k + '#' + i); }
+        }
+      }
+    };
+    cmp(KICK, YUP); cmp(KICK_I, YUP_I);
+    // and the two tables must not be the same table
+    const distinct = JSON.stringify(KICK) !== JSON.stringify(KICK_I);
+    report(mode, !bad && checked === 80 && distinct ? 'PASS' : 'FAIL',
+      { offsetsChecked: checked, firstMismatch: bad || 'none', tablesDistinct: distinct });
+  } else if (mode === 'mech-srs-i') {
+    // a flat I above a one-wide well: the I table's [+1,0] at index 2 slides it in.
+    // the JLSTZ table's index 2 for this transition is [-1,-1], so only the real
+    // I-table produces this result — the behavioural counterpart to mech-srs-table.
+    blank();
+    setRows([[21, 'xxxxxx.xxx'], [20, 'xxxxxx.xxx'], [19, 'xxxxxx.xxx'], [18, 'xxxxxx.xxx']]);
+    G.piece = { kind: 'I', rot: 0, x: 3, y: 16 };
+    const naiveWell = fits('I', 1, 3, 16);
+    const kickedWell = rotate(1);
+    const wellX = G.piece.x, wellKick = G.lastKick;
+    const jl = KICK['01'][2];
+    const distinctFromJLSTZ = !(jl[0] === 1 && jl[1] === 0);
+    // and a vertical I in a flat field turns back without needing help
+    blank();
+    G.piece = { kind: 'I', rot: 1, x: 3, y: 5 };
+    const freeTurn = rotate(-1) && G.lastKick === 0;
+    report(mode, !naiveWell && kickedWell && wellX === 4 && wellKick === 2 && distinctFromJLSTZ && freeTurn ? 'PASS' : 'FAIL',
+      { naiveFits: naiveWell, kicked: kickedWell, landedX: wellX, kickIndex: wellKick,
+        offsetIsIOnly: distinctFromJLSTZ, freeTurnUsesNoKick: freeTurn });
+  } else if (mode === 'mech-lockout') {
+    // a piece that finishes entirely inside the two hidden rows is a lock-out
+    blank(); G.headless = true;
+    // the spawn columns stay clear, so the ONLY thing that can end this game is the
+    // lock-out rule itself — delete that rule and the run simply continues.
+    const spec = [];
+    for (let y = 2; y < H; y++) spec.push([y, 'xxx...xxxx']);
+    setRows(spec);
+    const spawnFree = fits('T', 0, 3, 1);
+    G.piece = { kind: 'O', rot: 0, x: 7, y: 0 };    // rests entirely in the hidden rows
+    const restsHidden = !fits('O', 0, 7, 1);
+    const wasOver = G.over;
+    lockPiece();
+    report(mode, spawnFree && restsHidden && !wasOver && G.over === true ? 'PASS' : 'FAIL',
+      { spawnWouldHaveBeenLegal: spawnFree, pieceRestsAboveWell: restsHidden, gameOver: G.over });
+  } else if (mode === 'mech-nomino-loss') {
+    // no rotation, kick or drop may ever destroy part of a piece
+    blank();
+    let worst = 4;
+    for (const k of KINDS) for (let r = 0; r < 4; r++) for (let x = -3; x <= W; x++) {
+      if (!fits(k, r, x, 1)) continue;
+      blank();
+      G.piece = { kind: k, rot: r, x: x, y: 1 };
+      hardDrop();
+      let n = 0;
+      for (let i = 0; i < W * H; i++) if (G.board[i]) n++;
+      worst = Math.min(worst, n);
+    }
+    // the well has a ceiling: no placement whose cells sit above row 0 may ever be legal
+    blank();
+    let ceilingLeaks = 0, checkedPos = 0;
+    for (const k of KINDS) for (let r = 0; r < 4; r++) for (let x = -3; x <= W; x++) {
+      for (let y = -4; y <= 0; y++) {
+        const cells = cellsOf(k, r, x, y);
+        const above = cells.some(c => c[1] < 0);
+        if (!above) continue;
+        checkedPos++;
+        if (fits(k, r, x, y)) ceilingLeaks++;      // a legal placement with a cell outside the well
+      }
+    }
+    // and no rotation, from any legal spot, may push a cell through that ceiling
+    let escaped = false;
+    for (const k of KINDS) for (let r = 0; r < 4; r++) for (let x = -1; x <= W - 1; x++) for (let y = 0; y <= 2; y++) {
+      blank();
+      if (!fits(k, r, x, y)) continue;
+      G.piece = { kind: k, rot: r, x: x, y: y };
+      rotate(1); rotate(1); rotate(-1);
+      for (const [bx, by] of cellsOf(G.piece.kind, G.piece.rot, G.piece.x, G.piece.y))
+        if (by < 0 || by >= H || bx < 0 || bx >= W) escaped = true;
+    }
+    report(mode, worst === 4 && ceilingLeaks === 0 && !escaped ? 'PASS' : 'FAIL',
+      { fewestMinoesLanded: worst, expected: 4, aboveCeilingPositionsTested: checkedPos,
+        illegalPlacementsAllowed: ceilingLeaks, rotationPushedCellOut: escaped });
+  } else if (mode === 'mech-spin-scoring') {
+    // exact points for every spin row, and the state each leaves behind
+    const slot = () => {                       // rebuilds the proven TSD slot
+      blank(); G.level = 1;
+      setRows([[19, 'xxxx..x...'], [20, 'xxxx...xxx'], [21, 'xxxxx.xxxx']]);
+      G.piece = { kind: 'T', rot: 1, x: 3, y: 1 };
+      while (fits('T', 1, 3, G.piece.y + 1)) G.piece.y++;
+    };
+    slot();
+    const b0 = G.score; rotate(1); lockPiece();
+    const tsd = G.score - b0, b2bAfterTSD = G.b2b;
+    // a spin that clears nothing: no points beyond 400, no back-to-back, and the combo dies
+    blank(); G.level = 1;
+    setRows([[19, 'xxxx..x...'], [20, 'xxxx...x..'], [21, 'xxxxx.x...']]);
+    G.combo = 4; G.b2b = false;
+    G.piece = { kind: 'T', rot: 1, x: 3, y: 1 };
+    while (fits('T', 1, 3, G.piece.y + 1)) G.piece.y++;
+    const b1 = G.score; const spun = rotate(1);
+    const kind0 = detectTSpin(G.piece);
+    lockPiece();
+    const zeroPts = G.score - b1, zeroB2B = G.b2b, zeroCombo = G.combo;
+    // --- the negative controls: what is NOT a T-spin ---
+    // a mini: three corners, but only one of them in front of the T's point
+    const miniSlot = (bottomLeft) => {
+      blank(); G.level = 1;
+      setRows([[19, '...x.x....'], [21, bottomLeft ? '...x......' : '..........']]);
+      G.piece = { kind: 'T', rot: 1, x: 3, y: 19 };
+    };
+    miniSlot(true);
+    const b2 = G.score; rotate(1);
+    const miniKind = detectTSpin(G.piece);
+    lockPiece();
+    const miniPts = G.score - b2;
+    // two corners is not a spin at all
+    miniSlot(false);
+    rotate(1);
+    const twoCornerKind = detectTSpin(G.piece);
+    // and a T that merely fell into the slot never spun
+    miniSlot(true);
+    G.piece = { kind: 'T', rot: 2, x: 3, y: 1 };
+    hardDrop();
+    const droppedKind = G.tspins;
+    // the decisive control: rotate somewhere legal, then SLIDE into a three-corner hole.
+    // the corners are all there; the rotation is not the last thing that happened.
+    blank(); G.level = 1;
+    setRows([[19, '.....x.x..'], [21, '.....x....']]);
+    G.piece = { kind: 'T', rot: 1, x: 7, y: 19 };
+    const rotatedOk = rotate(1);                    // now rot 2 at x=7, flag set
+    const slid = move(-1) && move(-1);              // walk it into the slot; flag cleared
+    const slidCorners = cornersFilled(G.piece).total;
+    const slidKind = detectTSpin(G.piece);
+    const bs = G.score; lockPiece();
+    const slidPts = G.score - bs;
+    // holding must not let a rotation flag leak into the next piece (the swap branch)
+    blank(); G.headless = true;
+    G.piece = { kind: 'T', rot: 0, x: 3, y: 1 };
+    holdPiece();                                   // fills the hold, spawns a successor
+    hardDrop();                                    // refreshes the privilege
+    rotate(1);
+    const swapped = holdPiece();                   // now the swap branch runs
+    const flagCleared = G.lastWasRotate === false;
+    report(mode, tsd === 1200 && b2bAfterTSD === true && spun && kind0 > 0 && zeroPts === 400 &&
+      zeroB2B === false && zeroCombo === -1 && miniKind === 1 && miniPts === 100 &&
+      twoCornerKind === 0 && droppedKind === 0 && rotatedOk && slid && slidCorners === 3 &&
+      slidKind === 0 && slidPts === 0 && swapped && flagCleared ? 'PASS' : 'FAIL',
+      { tspinDouble: tsd, armsB2B: b2bAfterTSD, clearlessSpinPoints: zeroPts, expected: 400,
+        clearlessArmsB2B: zeroB2B, clearlessCombo: zeroCombo,
+        miniIsMini: miniKind === 1, miniPoints: miniPts, twoCornersIsNoSpin: twoCornerKind === 0,
+        droppedTIsNoSpin: droppedKind === 0,
+        slidIntoCorners: slidCorners, slidIsNoSpin: slidKind === 0, slidPoints: slidPts,
+        holdSwapClearsRotateFlag: flagCleared });
   } else if (mode === 'mech-tspin') {
     // the canonical T-spin double: an overhang the T can only reach by spinning under it
     blank(); G.level = 1;
@@ -504,7 +717,7 @@ function runVerify(mode) {
     const before = G.score, linesBefore = G.lines;
     lockPiece();
     const gained = G.score - before, cleared = G.lines - linesBefore;
-    report(mode, !dropCanDouble && spun && kind === 2 && cleared === 2 && gained === 1200 ? 'SOLVED' : 'FAILED',
+    report(mode, !dropCanDouble && spun && kind === 2 && cleared === 2 && gained === 1200 ? 'PASS' : 'FAIL',
       { reachableByPlainDrop: dropCanDouble, restedAtRow: restY, kickIndex: G.lastKick,
         spinRecognised: kind === 2, linesCleared: cleared, points: gained, expected: 1200 });
   } else if (mode === 'mech-lock') {
@@ -526,7 +739,7 @@ function runVerify(mode) {
     let n = 0;
     for (let i = 0; i < 60 && G.piece === P; i++) { move(i % 2 ? -1 : 1); tick(0.3); n++; }
     const capped = G.piece !== P && n <= LOCK_RESETS + 2;
-    report(mode, aliveEarly && aliveAfterReset && lockedLate && capped ? 'SOLVED' : 'FAILED',
+    report(mode, aliveEarly && aliveAfterReset && lockedLate && capped ? 'PASS' : 'FAIL',
       { survivesHalfDelay: aliveEarly, moveResets: aliveAfterReset, locksEventually: lockedLate, resetCapHolds: capped, movesBeforeLock: n });
   } else if (mode === 'mech-clear') {
     blank();
@@ -537,7 +750,7 @@ function runVerify(mode) {
     hardDrop();
     const marker = G.board[21 * W + 0];            // the lone block must have fallen to the floor
     const rowCount = (() => { let n = 0; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (G.board[y * W + x]) { n++; break; } return n; })();
-    report(mode, G.lines === 3 && marker && rowCount === 1 && G.score - before >= 500 ? 'SOLVED' : 'FAILED',
+    report(mode, G.lines === 3 && marker && rowCount === 1 && G.score - before >= 500 ? 'PASS' : 'FAIL',
       { linesCleared: G.lines, blockFellToFloor: !!marker, occupiedRows: rowCount, points: G.score - before });
   } else if (mode === 'mech-score') {
     const one = (rowsFilled, lvl) => {
@@ -555,7 +768,7 @@ function runVerify(mode) {
     blank(); const b0 = G.score; G.piece = { kind: 'O', rot: 0, x: 3, y: 1 }; hardDrop();
     const dropPts = G.score - b0;
     const ok = s1 === 100 && s2 === 300 && s3 === 500 && s4 === 800 && s4L3 === 2400 && dropPts === 38;
-    report(mode, ok ? 'SOLVED' : 'FAILED', { single: s1, double: s2, triple: s3, tetris: s4, tetrisAtLevel3: s4L3, hardDropPoints: dropPts });
+    report(mode, ok ? 'PASS' : 'FAIL', { single: s1, double: s2, triple: s3, tetris: s4, tetrisAtLevel3: s4L3, hardDropPoints: dropPts });
   } else if (mode === 'mech-b2b') {
     const tetris = () => {
       setRows([[12, 'x.........'],           // dirt, so a tetris is only a tetris
@@ -570,7 +783,7 @@ function runVerify(mode) {
     G.piece = { kind: 'I', rot: 1, x: 7, y: 18 }; hardDrop();
     const brokenB2B = G.b2b === false;
     // the second tetris is 1200 (800 x1.5 back-to-back) plus a 50-point combo for the unbroken chain
-    report(mode, first === 800 && second === 1250 && brokenB2B ? 'SOLVED' : 'FAILED',
+    report(mode, first === 800 && second === 1250 && brokenB2B ? 'PASS' : 'FAIL',
       { firstTetris: first, secondTetris: second, expected: '1200 b2b + 50 combo', singleBreaksChain: brokenB2B });
   } else if (mode === 'mech-combo') {
     blank(); G.level = 1;
@@ -585,7 +798,7 @@ function runVerify(mode) {
     blank(); G.level = 1; G.combo = 5;
     G.piece = { kind: 'O', rot: 0, x: 3, y: 1 }; hardDrop();   // a clearless lock resets it
     const reset = G.combo === -1;
-    report(mode, rising && combo === 2 && reset ? 'SOLVED' : 'FAILED',
+    report(mode, rising && combo === 2 && reset ? 'PASS' : 'FAIL',
       { points: pts.join('/'), comboAfter3: combo, resetsOnNoClear: reset });
   } else if (mode === 'mech-gravity') {
     const g1 = gravityInterval(1), g5 = gravityInterval(5), g10 = gravityInterval(10), g15 = gravityInterval(15);
@@ -594,7 +807,7 @@ function runVerify(mode) {
     const levelled = G.level === 1 + Math.floor(G.lines / 10);
     const monotone = g1 > g5 && g5 > g10 && g10 > g15;
     const exact = Math.abs(g1 - 1) < 1e-9 && Math.abs(g5 - Math.pow(0.772, 4)) < 1e-9;
-    report(mode, levelled && monotone && exact ? 'SOLVED' : 'FAILED',
+    report(mode, levelled && monotone && exact ? 'PASS' : 'FAIL',
       { level1: +g1.toFixed(4), level5: +g5.toFixed(4), level10: +g10.toFixed(4), level15: +g15.toFixed(5), lines: G.lines, level: G.level });
   } else if (mode === 'mech-hold') {
     newGame(RUN_SEED, { headless: true });
@@ -605,26 +818,57 @@ function runVerify(mode) {
     hardDrop();                              // locking refreshes the privilege
     const nowActive = G.piece.kind;
     const swapOk = holdPiece() && G.piece.kind === first && G.hold === nowActive;
-    report(mode, heldFirst && secondBlocked && swapOk ? 'SOLVED' : 'FAILED',
+    report(mode, heldFirst && secondBlocked && swapOk ? 'PASS' : 'FAIL',
       { storesPiece: heldFirst, blockedTwiceInARow: secondBlocked, swapsAfterLock: swapOk });
   } else if (mode === 'mech-ghost') {
-    blank();
-    setRows([[21, 'xxx....xxx'], [20, 'xxx.......']]);
-    G.piece = { kind: 'T', rot: 0, x: 3, y: 1 };
-    const gy = ghostY();
-    const pk = G.piece.kind, pr = G.piece.rot, px = G.piece.x;
-    hardDrop();
-    let landed = -1;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (G.board[y * W + x] && landed < 0) landed = y;
-    const expect = Math.min.apply(null, cellsOf(pk, pr, px, gy).map(c => c[1]));
-    report(mode, landed === expect ? 'SOLVED' : 'FAILED', { ghostRow: gy, landedTopRow: landed, expectedTopRow: expect });
+    // an independent oracle: the stack top of each column bounds how far the shape may fall.
+    // it never calls ghostY() or hardDrop(), so it cannot agree with them by construction.
+    const oracle = (kind, rot, x) => {
+      let limit = Infinity;
+      for (const [cxo, cyo] of SHAPES[kind][rot & 3]) {
+        const col = x + cxo;
+        if (col < 0 || col >= W) return null;
+        let top = H;
+        for (let y = 0; y < H; y++) if (G.board[y * W + col]) { top = y; break; }
+        limit = Math.min(limit, top - 1 - cyo);
+      }
+      return limit;
+    };
+    const CASES = [
+      { rows: [[21, 'xxx....xxx'], [20, 'xxx.......']], kind: 'T', rot: 0, x: 3 },
+      { rows: [[21, 'xxxxxxxxx.'], [20, 'x.......xx']], kind: 'I', rot: 0, x: 3 },
+      { rows: [[21, 'x........x'], [20, 'x........x'], [19, 'x........x']], kind: 'O', rot: 0, x: 4 },
+      { rows: [[21, 'xxxx..xxxx'], [20, 'xxxx...xxx'], [19, 'xx.....xxx']], kind: 'S', rot: 1, x: 3 },
+      { rows: [[21, 'x.x.x.x.x.']], kind: 'J', rot: 2, x: 2 },
+      { rows: [[18, '....xx....'], [21, 'xxx....xxx']], kind: 'L', rot: 3, x: 4 },
+      { rows: [], kind: 'Z', rot: 0, x: 0 },
+      { rows: [[21, '.........x'], [20, '.........x']], kind: 'I', rot: 1, x: 6 },
+    ];
+    let bad = -1, checked = 0, detail = '';
+    for (let i = 0; i < CASES.length; i++) {
+      const c = CASES[i];
+      blank(); setRows(c.rows);
+      G.piece = { kind: c.kind, rot: c.rot, x: c.x, y: 0 };
+      const expect = oracle(c.kind, c.rot, c.x);
+      const gy = ghostY();
+      hardDrop();
+      let topRow = H;
+      for (let y = 0; y < H && topRow === H; y++)
+        for (let x2 = 0; x2 < W; x2++) if (G.board[y * W + x2] === c.kind) { topRow = y; break; }
+      const minCyo = Math.min.apply(null, SHAPES[c.kind][c.rot & 3].map(s => s[1]));
+      checked++;
+      if (expect === null || gy !== expect || topRow !== expect + minCyo) {
+        bad = i; detail = 'ghost=' + gy + ' oracle=' + expect + ' landedTop=' + topRow; break;
+      }
+    }
+    report(mode, bad < 0 ? 'PASS' : 'FAIL', { casesChecked: checked, of: CASES.length, firstBadCase: bad, detail: detail || 'none' });
   } else if (mode === 'mech-topout') {
     blank(); G.headless = true;
     const spec = [];
     for (let y = 0; y <= 3; y++) spec.push([y, 'xxxxxxxxxx']);
     setRows(spec);
     const spawned = spawnNext('T');
-    report(mode, !spawned && G.over ? 'SOLVED' : 'FAILED', { spawnRefused: !spawned, gameOver: G.over });
+    report(mode, !spawned && G.over ? 'PASS' : 'FAIL', { spawnRefused: !spawned, gameOver: G.over });
   } else if (mode === 'mech-perfect') {
     blank(); G.level = 1;
     setRows([[21, 'xxxxxx....'], [20, 'xxxxxx....']]);
@@ -636,7 +880,26 @@ function runVerify(mode) {
     const gained = G.score - before;
     let empty = true;
     for (let i = 0; i < W * H; i++) if (G.board[i]) { empty = false; break; }
-    report(mode, empty && gained >= 1200 ? 'SOLVED' : 'FAILED', { wellEmptied: empty, points: gained, expectedAtLeast: 1200 });
+    // 300 (double) + 1200 (perfect-clear double) + 4 (two hard-dropped cells); combo 0 pays nothing
+    const exact = gained === 1504;
+    // and each perfect-clear bonus must be its own constant
+    // a single-row perfect clear: a flat I completes the floor and leaves nothing behind
+    blank(); G.level = 1;
+    setRows([[21, 'xxxxxx....']]);
+    G.piece = { kind: 'I', rot: 0, x: 6, y: 1 };
+    while (fits('I', 0, 6, G.piece.y + 1)) G.piece.y++;
+    const b1 = G.score; hardDrop();
+    const p1 = G.score - b1;
+    // a four-row perfect clear: a vertical I completes four stacked rows at once
+    blank(); G.level = 1;
+    setRows([[18, 'xxxxxxxxx.'], [19, 'xxxxxxxxx.'], [20, 'xxxxxxxxx.'], [21, 'xxxxxxxxx.']]);
+    G.piece = { kind: 'I', rot: 1, x: 7, y: 1 };
+    while (fits('I', 1, 7, G.piece.y + 1)) G.piece.y++;
+    const b4 = G.score; hardDrop();
+    const p4 = G.score - b4;
+    report(mode, empty && exact && p1 === 900 && p4 === 2800 ? 'PASS' : 'FAIL',
+      { wellEmptied: empty, points: gained, expectedExact: 1504,
+        singlePC: p1, expectedSinglePC: 900, tetrisPC: p4, expectedTetrisPC: 2800 });
   } else {
     report(mode, 'UNKNOWN');
   }
@@ -1102,6 +1365,14 @@ function draw() {
   drawWell();
   drawHUD();
   drawBanner();
+  if (G.staged && G.shotMode) {
+    cx.save();
+    cx.fillStyle = '#ffd34a'; cx.globalAlpha = 0.75;
+    cx.font = 'bold 11px monospace'; cx.textAlign = 'center';
+    cx.fillText('STAGED POSITION \u2014 hand-built board, not bot play', 640, 706);
+    cx.restore();
+    cx.textAlign = 'left';
+  }
   if (G.screen === 'paused') drawPaused();
   if (G.screen === 'over') drawOver();
 }

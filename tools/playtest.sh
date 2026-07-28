@@ -10,7 +10,8 @@ run() {
     "file://$DIR/index.html?verify=$1" 2>/dev/null | grep -o 'VERIFY:{[^<]*' | head -1
 }
 for m in solution solution-seeds null ablate-rotation ablate-holes ablate-height \
-         mech-bag mech-srs mech-tspin mech-lock mech-clear mech-score mech-b2b \
+         mech-bag mech-shapes mech-srs mech-srs-table mech-srs-i mech-tspin mech-spin-scoring \
+         mech-lock mech-lockout mech-nomino-loss mech-clear mech-score mech-b2b \
          mech-combo mech-gravity mech-hold mech-ghost mech-topout mech-perfect; do
   run "$m"
 done

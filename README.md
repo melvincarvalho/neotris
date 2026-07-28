@@ -39,7 +39,7 @@ plus a Tetris-fidelity judge), honest scores. The proof harness's next
 species: **stacks as theorems.** After empires, voyages and descents, a
 game small enough that the whole thing can be proved.
 
-`tools/playtest.sh` proves 19 claims:
+`tools/playtest.sh` proves 25 claims:
 
 - **the stacking bot must survive**: 400 pieces without topping out,
   156 lines, level 16 — and it plays through the *same functions the
@@ -57,28 +57,49 @@ game small enough that the whole thing can be proved.
   65 lines cleared — buried holes are the thing that actually kills;
 - **ablate-height LOSES** (40 pieces): delete the flatness terms and it
   dies almost as fast as no policy at all;
-- **13 mechanism proofs** isolate every rule: the 7-bag (100
-  consecutive bags, each a permutation of all seven pieces); an SRS
-  wall kick (a J flush against the left wall cannot turn in place — the
-  first kick shifts it one column in); a **T-spin double that no
-  straight drop can achieve** (the harness proves the slot unreachable
-  by any column and rotation, then rests, rotates, kicks in, and scores
-  exactly 1200); lock delay (survives half a delay, resets on movement,
-  and still locks after a finite budget of 16 shuffles); line collapse
-  and the blocks that fall into it; the scoring table
-  (100/300/500/800, ×3 at level 3, two points per hard-dropped cell);
-  back-to-back (800 then 1250 — a 1.5× tetris plus a combo — and a
-  plain single breaks the chain); combos (100/150/200, reset by a
-  clearless lock); the gravity curve (1.000s at level 1, 0.0642s at
-  level 10); hold (stores, refuses a second use, swaps after a lock);
-  the ghost landing exactly where a hard drop lands; top-out; and the
-  perfect clear.
+- **19 mechanism proofs** isolate every rule. All 28 rotation states
+  are compared against grids typed independently in the test; **all 80
+  SRS kick offsets** are checked against the canonical y-up tables,
+  negated inside the assertion, and the two tables must differ; the
+  I-piece's own table is then exercised behaviourally by a kick only it
+  can produce. The 7-bag is checked over 100 consecutive bags. A
+  **T-spin double that no straight drop can achieve** is proved by
+  first enumerating every column and rotation and showing none of them
+  clears two rows — then resting, rotating, kicking in, and scoring
+  exactly 1200. Spin scoring carries its negative controls: a mini
+  scores 100 and not 400; two corners is not a spin; a T that *fell*
+  into a three-corner hole did not spin; and a T that **rotated
+  elsewhere and then slid** into a three-corner hole did not spin
+  either. Lock delay survives half a delay, resets on movement, and
+  still locks after a finite budget. Lock-out is proved on a board
+  where a successor *could* legally have spawned, so only the lock-out
+  rule can end that game. Nothing may ever leave the well: 1,456
+  above-the-ceiling placements are rejected and no rotation pushes a
+  cell through. Plus line collapse, the scoring table, back-to-back,
+  combos, the gravity curve, hold, the ghost (against an oracle that
+  never calls the game's own drop code), block-out, and the perfect
+  clear at exact values.
+
+**And the proofs must prove they can fail.** `tools/mutate.sh` breaks
+one real Tetris rule at a time — 30 mutants: give the I piece the
+JLSTZ kicks, un-negate a kick table, swap S and Z, weaken the
+three-corner rule, delete lock-out, let minoes escape the well, freeze
+the level, remove the combo reset — and requires that a **targeted
+mechanism proof** turn red for every one. A mutant killed only by the
+400-piece bot run doesn't count: a long game diverges under almost any
+change, which says nothing about whether the rule is constrained.
+
+```
+30/30 killed by a targeted mechanism proof
+ 0/30 killed only by a macro run (chaos)
+ 0/30 survived everything
+```
 
 ## Scores
 
 | round | composition | game-feel | HUD | visual mean | Tetris fidelity |
 |---|---|---|---|---|---|
-| 1 (final) | 4.6 | 6.4 | 5.3 | **5.4** | see note |
+| 1 (final) | 4.6 | 6.4 | 5.3 | **5.4** | 8.5 |
 
 Game-feel 6.4 is the highest that critic has given any game in the
 series — the bet that a *simple* game concentrates the whole juice
@@ -117,12 +138,32 @@ exist: a pulsing PRESS SPACE and a BEST score on the title, a bordered
 retry prompt and a run summary on death, an `R` restart key, a LOCKED
 badge on a spent hold, and a RUN panel with TIME, PPS and LPM.
 
-All 19 theorems re-verified after every change. The scores above are
-the panel's, judged before those fixes.
+All theorems re-verified after every change.
+
+**The fidelity judge scored 8.5 — the highest fidelity score in the
+series** — verifying by machine rather than by eye that all 40 SRS
+offsets per table, all 28 rotation states, the spawn columns, the
+Tetris Worlds gravity curve, the whole Guideline scoring table and the
+three-corner rule with its front-corner subtlety are exact, that the
+sim RNG never leaks into the renderer, and that *"the bot is honest: it
+cannot place a piece a keyboard couldn't."* Then it did something no
+critic in this series had done: it **mutation-tested the harness** and
+reported that *"16 of 25 rule-breaking mutants pass all 19 proofs
+undetected… `mech-ghost` is a strict tautology — I replaced `ghostY`
+with `return p.y` and it reported SOLVED. It is arithmetically
+incapable of failing."* It was right, and it found three real bugs in
+the game while it was at it. Everything above was rebuilt in response.
+The scores are the panel's, judged before those fixes.
 
 ## Honest assessment
 
 - **One critic round** — the scores are a floor, not a ceiling.
+- **Thirty mutants is not all mutants.** The gate proves the suite
+  catches the thirty rule-breaks it was pointed at; a rule nobody
+  thought to mutate is still a rule nobody is guarding.
+- **The input layer is unproven.** DAS, ARR and soft-drop repeat rates
+  are exercised by no test — they could be set to nonsense and every
+  proof would stay green.
 - **This is Guideline Tetris, not 1984 Tetris.** Pajitnov's original
   had no hold, no ghost, no wall kicks, no bag and no lock delay. Every
   modern comfort here is a post-2001 invention, faithfully implemented
@@ -137,8 +178,10 @@ the panel's, judged before those fixes.
 - **No 20G, no line-clear delay, no garbage, no versus** — this is a
   single-player marathon, not a competitive stack.
 - Staged evidence shots are separate deterministic runs, not one
-  continuous playthrough; the T-spin and combo boards are authored
-  positions (the same slot the theorem proves) rather than bot play.
+  continuous playthrough. The T-spin and combo boards are **authored
+  positions** — the same slot the theorem proves — and they now say so
+  on the image itself: any capture built from a hand-made board carries
+  a `STAGED POSITION` watermark rather than passing as play.
 - **The clock refuses to lie.** A bot that hard-drops instantly has no
   wall-clock, so TIME/PPS/LPM render as `—` in any staged shot that was
   not actually timed. The one shot that shows real numbers
@@ -171,7 +214,31 @@ the panel's, judged before those fixes.
    500px apart, differing by one. Nineteen green proofs had nothing to
    say about it, because it was a lie told by the *evidence*, not by
    the game. That is what a second pair of eyes is for.
-5. **The screenshot that couldn't happen.** The staged T-spin shot kept
+5. **The harness was audited, and it did not survive the audit.** The
+   fidelity critic mutation-tested the proofs and found most of them
+   toothless — including one that could not fail by construction. The
+   response was to rebuild: an independent ghost oracle, all 80 kick
+   offsets asserted against canonical tables, all 28 rotation states,
+   negative controls for what a T-spin *is not*, a lock-out proof on a
+   board where the game would otherwise have continued, and a mutation
+   gate wired into `tools/` so the suite must keep proving it can fail.
+   The gate's first honest run scored 23/30 with 6 survivors; closing
+   those gaps took four new proofs and got it to 30/30.
+6. **One of the survivors was an equivalent mutant — my own fault.**
+   `hold-keeps-rotation-flag` survived because I had defensively
+   cleared the rotation flag in *two* places, so deleting one changed
+   nothing. The fix was to delete my own redundancy and leave a single
+   source of truth. A mutation gate does not only find weak tests; it
+   finds code that is pretending to be careful.
+7. **The gate lied on its first run, and the lie was legible.** Version
+   one reported a triumphant 30/30 — every mutant "killed by
+   `solution`", the very first mode it tried. Two things were wrong:
+   the mutant copies lived in a temp directory the browser could not
+   read (so *everything* failed, including proofs the mutation could
+   not possibly affect), and stopping at the first red mode hid which
+   proof had actually done the work. A gate that reports success when
+   its subject won't even load is worse than no gate.
+8. **The screenshot that couldn't happen.** The staged T-spin shot kept
    failing its own honesty check: the decorative stack drawn above the
    slot had quietly walled off the column the T falls down. The capture
    refused to claim a T-spin it could not perform — which is exactly
