@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>NEOTRIS — seven pieces, one well</title>
 <meta name="description" content="A Tetris tribute built by a harsh-critic agent loop: the 7-bag, SRS wall kicks, T-spins, lock delay and the full scoring table — with 19 machine-verified stack proofs. No assets: every pixel from code.">
 <meta property="og:title" content="NEOTRIS — seven pieces, one well">
@@ -18,9 +18,10 @@
 <meta name="twitter:image" content="https://melvincarvalho.github.io/neotris/og.png">
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="%2302040a"/><rect x="4" y="6" width="7" height="7" fill="none" stroke="%233ef0ff" stroke-width="2"/><rect x="11" y="6" width="7" height="7" fill="none" stroke="%233ef0ff" stroke-width="2"/><rect x="18" y="6" width="7" height="7" fill="none" stroke="%233ef0ff" stroke-width="2"/><rect x="11" y="13" width="7" height="7" fill="none" stroke="%23c86bff" stroke-width="2"/><rect x="11" y="20" width="7" height="7" fill="none" stroke="%23ffe14a" stroke-width="2"/><rect x="18" y="20" width="7" height="7" fill="none" stroke="%23ffe14a" stroke-width="2"/></svg>'>
 <style>
-  html, body { margin: 0; height: 100%; background: #02040a; overflow: hidden; }
-  body { display: flex; align-items: center; justify-content: center; }
-  canvas { max-width: 100vw; max-height: 100vh; aspect-ratio: 16/9; image-rendering: auto; outline: none; }
+  html, body { margin: 0; height: 100%; background: #02040a; overflow: hidden; overscroll-behavior: none; }
+  body { display: flex; align-items: center; justify-content: center;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  canvas { max-width: 100vw; max-height: 100vh; max-height: 100dvh; image-rendering: auto; outline: none; touch-action: none; }
 </style>
 </head>
 <body>
