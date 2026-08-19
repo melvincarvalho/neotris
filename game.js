@@ -924,6 +924,7 @@ function shade(col, f) {
   const s = 'rgb(' + Math.min(255, Math.round(r * f)) + ',' + Math.min(255, Math.round(g * f)) + ',' + Math.min(255, Math.round(b * f)) + ')';
   _shade[key] = s; return s;
 }
+const _bodyGrad = {};                              // block-body gradients, keyed by row and lit state
 
 function shakeXY() {
   if (G.shake <= 0 || G.shotMode) return [0, 0];
@@ -949,10 +950,14 @@ function block(px, py, col, alpha, ghost, glow) {
   cx.globalAlpha = a;
   cx.fillStyle = shade(col, lit ? 0.42 : 0.30);    // body: solid, colour-tinted, dark enough to hold shape
   cx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
-  const g = cx.createLinearGradient(0, py, 0, py + CELL);
-  g.addColorStop(0, 'rgba(255,255,255,' + (lit ? 0.30 : 0.16) + ')');
-  g.addColorStop(0.42, 'rgba(255,255,255,0.03)');
-  g.addColorStop(1, 'rgba(0,0,0,0.34)');
+  let g = _bodyGrad[py + '|' + lit];               // py is grid-aligned, so this cache stays tiny
+  if (!g) {
+    g = cx.createLinearGradient(0, py, 0, py + CELL);
+    g.addColorStop(0, 'rgba(255,255,255,' + (lit ? 0.30 : 0.16) + ')');
+    g.addColorStop(0.42, 'rgba(255,255,255,0.03)');
+    g.addColorStop(1, 'rgba(0,0,0,0.34)');
+    _bodyGrad[py + '|' + lit] = g;
+  }
   cx.fillStyle = g;
   cx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
   // bevel: a lit top edge and a shaded seat give every cell weight
