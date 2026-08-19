@@ -913,6 +913,17 @@ const LX = 180, LW = 260, RX = 840, RW = 260, RAIL = 654;
 const PW = 720, PH = 1280, PSCALE = 1.7;
 const PWX = (PW - (W * CELL + 20) * PSCALE) / 2, PWY = 196;
 let cv, cx, vx, scene;
+const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
+
+// tinted shades of the canon colours, cached — the block material is built from these
+const _shade = {};
+function shade(col, f) {
+  const key = col + '|' + f;
+  if (_shade[key]) return _shade[key];
+  const r = parseInt(col.slice(1, 3), 16), g = parseInt(col.slice(3, 5), 16), b = parseInt(col.slice(5, 7), 16);
+  const s = 'rgb(' + Math.min(255, Math.round(r * f)) + ',' + Math.min(255, Math.round(g * f)) + ',' + Math.min(255, Math.round(b * f)) + ')';
+  _shade[key] = s; return s;
+}
 
 function shakeXY() {
   if (G.shake <= 0 || G.shotMode) return [0, 0];
@@ -922,7 +933,7 @@ function shakeXY() {
 function block(px, py, col, alpha, ghost, glow) {
   const a = alpha === undefined ? 1 : alpha;
   if (ghost) {                                    // a filled silhouette survives any tint
-    cx.globalAlpha = a * 0.5;
+    cx.globalAlpha = a * 0.35;
     cx.fillStyle = col;
     cx.fillRect(px + 2, py + 2, CELL - 4, CELL - 4);
     cx.globalAlpha = a;
@@ -933,27 +944,70 @@ function block(px, py, col, alpha, ghost, glow) {
     cx.globalAlpha = 1;
     return;
   }
+  const lit = glow !== false;                      // active pieces glow; the settled stack is quiet
   cx.save();
   cx.globalAlpha = a;
-  cx.fillStyle = col;
-  cx.globalAlpha = a * 0.34;                       // body: the block emits, not just outlines
+  cx.fillStyle = shade(col, lit ? 0.42 : 0.30);    // body: solid, colour-tinted, dark enough to hold shape
   cx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
   const g = cx.createLinearGradient(0, py, 0, py + CELL);
-  g.addColorStop(0, 'rgba(255,255,255,0.42)');
-  g.addColorStop(0.45, 'rgba(255,255,255,0.06)');
-  g.addColorStop(1, 'rgba(0,0,0,0.30)');
-  cx.globalAlpha = a;
+  g.addColorStop(0, 'rgba(255,255,255,' + (lit ? 0.30 : 0.16) + ')');
+  g.addColorStop(0.42, 'rgba(255,255,255,0.03)');
+  g.addColorStop(1, 'rgba(0,0,0,0.34)');
   cx.fillStyle = g;
   cx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
-  if (glow !== false) { cx.shadowColor = col; cx.shadowBlur = 9; }
-  cx.strokeStyle = col; cx.lineWidth = 2;
+  // bevel: a lit top edge and a shaded seat give every cell weight
+  cx.fillStyle = shade(col, lit ? 1.35 : 1.05); cx.globalAlpha = a * (lit ? 0.9 : 0.6);
+  cx.fillRect(px + 2, py + 2, CELL - 4, 2);
+  cx.fillStyle = 'rgba(0,0,0,0.5)';
+  cx.fillRect(px + 2, py + CELL - 4, CELL - 4, 2);
+  cx.globalAlpha = a;
+  if (lit) { cx.shadowColor = col; cx.shadowBlur = 10; }
+  cx.strokeStyle = lit ? col : shade(col, 0.82);
+  cx.lineWidth = lit ? 2 : 1.5;
   cx.strokeRect(px + 2, py + 2, CELL - 4, CELL - 4);
   cx.restore();
+}
+function drawStars() {
+  // pinprick depth layer — far behind everything, dim enough to never fight the stack
+  for (let i = 0; i < 70; i++) {
+    const x = hash32(i, 41) * 1280, y = hash32(i, 42) * 700;
+    const tw = 0.5 + 0.5 * Math.sin(G.time * (0.4 + hash32(i, 44)) + hash32(i, 45) * 6.28);
+    cx.globalAlpha = (0.03 + hash32(i, 43) * 0.09) * (0.6 + 0.4 * tw);
+    cx.fillStyle = i % 5 === 0 ? '#9fd8ff' : '#c8dcf2';
+    const s = hash32(i, 46) > 0.85 ? 2 : 1;
+    cx.fillRect(x, y, s, s);
+  }
+  cx.globalAlpha = 1;
+}
+function drawFloor(hy) {
+  // a perspective floor the whole scene stands on
+  const fg = cx.createLinearGradient(0, hy, 0, 720);
+  fg.addColorStop(0, 'rgba(52,110,205,0.10)');
+  fg.addColorStop(0.12, 'rgba(30,70,150,0.045)');
+  fg.addColorStop(1, 'rgba(10,25,60,0)');
+  cx.fillStyle = fg; cx.fillRect(0, hy, 1280, 720 - hy);
+  cx.strokeStyle = 'rgba(70,140,235,0.09)'; cx.lineWidth = 1;
+  cx.beginPath();
+  for (let i = 0; i < 8; i++) {                    // rows rush toward the viewer
+    const t = i / 7, y = hy + (720 - hy) * t * t;
+    cx.moveTo(0, y + 0.5); cx.lineTo(1280, y + 0.5);
+  }
+  for (let i = -9; i <= 9; i++) {                  // columns converge on the horizon
+    cx.moveTo(640 + i * 26, hy); cx.lineTo(640 + i * 200, 720);
+  }
+  cx.stroke();
+  const hg = cx.createLinearGradient(0, hy - 12, 0, hy + 14);   // horizon line glow
+  hg.addColorStop(0, 'rgba(80,170,255,0)');
+  hg.addColorStop(0.5, 'rgba(80,170,255,0.12)');
+  hg.addColorStop(1, 'rgba(80,170,255,0)');
+  cx.fillStyle = hg; cx.fillRect(0, hy - 12, 1280, 26);
 }
 function drawBackdrop() {
   const g = cx.createLinearGradient(0, 0, 0, 720);
   g.addColorStop(0, '#070a16'); g.addColorStop(0.6, '#03050c'); g.addColorStop(1, '#010206');
   cx.fillStyle = g; cx.fillRect(0, 0, 1280, 720);
+  drawStars();
+  drawFloor(560);
   // slow drift of wireframe pieces, far behind everything
   for (let i = 0; i < 14; i++) {
     const k = KINDS[Math.floor(hash32(i, 21) * 7)];
@@ -984,6 +1038,17 @@ function drawWell() {
   const maxH = Math.max.apply(null, heights);
   const danger = Math.max(0, Math.min(1, (maxH - 12) / 6));
   cx.fillStyle = '#04070e'; cx.fillRect(BX, BY, w, h);
+  // the chamber has walls: inner edge shading pulls the eye to the centre
+  const le = cx.createLinearGradient(BX, 0, BX + 22, 0);
+  le.addColorStop(0, 'rgba(20,45,95,0.22)'); le.addColorStop(1, 'rgba(20,45,95,0)');
+  cx.fillStyle = le; cx.fillRect(BX, BY, 22, h);
+  const re = cx.createLinearGradient(BX + w - 22, 0, BX + w, 0);
+  re.addColorStop(0, 'rgba(20,45,95,0)'); re.addColorStop(1, 'rgba(20,45,95,0.22)');
+  cx.fillStyle = re; cx.fillRect(BX + w - 22, BY, 22, h);
+  // ...and a floor the stack visibly sits on
+  const fl = cx.createLinearGradient(0, BY + h - 30, 0, BY + h);
+  fl.addColorStop(0, 'rgba(62,150,255,0)'); fl.addColorStop(1, 'rgba(62,150,255,0.13)');
+  cx.fillStyle = fl; cx.fillRect(BX, BY + h - 30, w, 30);
   if (danger > 0) {
     const rate = 4 + danger * 12;                  // the alarm quickens as the stack rises
     const p = G.shotMode ? 0.8 : 0.5 + 0.5 * Math.sin(G.time * rate);
@@ -1015,10 +1080,6 @@ function drawWell() {
   cx.lineWidth = 1.5; cx.setLineDash([6, 5]);
   cx.beginPath(); cx.moveTo(BX, BY + dRow * CELL + 0.5); cx.lineTo(BX + w, BY + dRow * CELL + 0.5); cx.stroke();
   cx.setLineDash([]);
-  cx.fillStyle = 'rgba(255,110,130,' + (0.4 + 0.5 * danger).toFixed(3) + ')';
-  cx.font = '8px monospace'; cx.textAlign = 'right';
-  cx.fillText('DANGER', BX - 6, BY + dRow * CELL + 3);
-  cx.textAlign = 'left';
   cx.restore();
   // settled blocks
   for (let y = HIDDEN; y < H; y++) {
@@ -1031,15 +1092,48 @@ function drawWell() {
         const k2 = Math.min(1, G.clearing.t / CLEAR_T);
         const hgt = CELL * (1 - k2 * 0.8), off = (CELL - hgt) / 2;
         cx.save();
-        cx.shadowColor = COL[k]; cx.shadowBlur = 18 * (1 - k2);
+        cx.shadowColor = COL[k]; cx.shadowBlur = 26 * (1 - k2 * 0.6);   // colour halo around a white-hot core
         cx.fillStyle = COL[k];
         cx.fillRect(px, py + off, CELL, hgt);
+        cx.shadowColor = '#ffffff'; cx.shadowBlur = 10 * (1 - k2);
         cx.fillStyle = '#ffffff';
-        cx.globalAlpha = 0.55 + 0.45 * (1 - k2);
-        cx.fillRect(px, py + off + hgt * 0.18, CELL, hgt * 0.64);
+        cx.globalAlpha = 0.75 + 0.25 * (1 - k2);
+        cx.fillRect(px, py + off + hgt * 0.14, CELL, hgt * 0.72);
         cx.restore();
-      } else block(px, py, COL[k]);
+      } else block(px, py, COL[k], 1, false, false);
     }
+  }
+  // the danger tag rides its line above the stack, on a plate so it always reads
+  cx.save();
+  const dTagA = 0.5 + 0.5 * danger;
+  cx.globalAlpha = dTagA;
+  cx.fillStyle = 'rgba(20,4,10,0.78)';
+  cx.fillRect(BX + 2, BY + dRow * CELL - 15, 62, 13);
+  cx.fillStyle = 'rgba(255,120,140,0.98)';
+  cx.font = 'bold 9px ' + MONO; cx.textAlign = 'left';
+  cx.letterSpacing = '2px';
+  cx.fillText('DANGER', BX + 7, BY + dRow * CELL - 5);
+  cx.letterSpacing = '0px';
+  cx.restore();
+  // clearing rows fire a full-width light streak — the moment should look like light, not jelly
+  if (G.clearing) {
+    const k2 = Math.min(1, G.clearing.t / CLEAR_T);
+    cx.save();
+    for (const ry of G.clearing.rows) {
+      if (ry < HIDDEN) continue;
+      const cyy = BY + (ry - HIDDEN) * CELL + CELL / 2;
+      const reach = 8 + 26 * k2;
+      const beam = cx.createLinearGradient(BX - reach, 0, BX + w + reach, 0);
+      const ba = (0.55 * (1 - k2 * 0.55)).toFixed(3);
+      beam.addColorStop(0, 'rgba(255,255,255,0)');
+      beam.addColorStop(0.08, 'rgba(255,255,255,' + ba + ')');
+      beam.addColorStop(0.92, 'rgba(255,255,255,' + ba + ')');
+      beam.addColorStop(1, 'rgba(255,255,255,0)');
+      cx.fillStyle = beam;
+      const bh = 3 + 5 * (1 - k2);
+      cx.fillRect(BX - reach, cyy - bh / 2, w + reach * 2, bh);
+    }
+    cx.restore();
   }
   // hard-drop streaks
   for (const d of G.drops) {
@@ -1078,7 +1172,7 @@ function drawWell() {
       if (age > 0.9) continue;
       cx.save();
       cx.globalAlpha = age > 0.6 ? (0.9 - age) / 0.3 : 1;
-      cx.fillStyle = f.col; cx.font = 'bold 17px monospace'; cx.textAlign = 'center';
+      cx.fillStyle = f.col; cx.font = 'bold 17px ' + MONO; cx.textAlign = 'center';
       cx.shadowColor = '#000'; cx.shadowBlur = 6;
       cx.fillText(f.pop, BX + f.x * CELL, BY + (f.y - HIDDEN) * CELL + 18 - age * 46);
       cx.restore();
@@ -1125,10 +1219,26 @@ function drawWell() {
     cx.globalAlpha = 1;
   }
   G.dust = G.dust.filter(d => G.time - d.t <= 0.4);
-  // frame
-  cx.strokeStyle = danger > 0.4 ? 'rgba(255,90,110,0.8)' : '#2a4a72';
+  // frame: a lit chamber, not a rectangle
+  const hot = danger > 0.4;
+  cx.save();
+  cx.shadowColor = hot ? '#ff5a72' : '#3e9bff'; cx.shadowBlur = 13;
+  cx.strokeStyle = hot ? 'rgba(255,110,130,0.95)' : 'rgba(110,175,250,0.85)';
   cx.lineWidth = 2;
-  cx.strokeRect(BX - 1, BY - 1, w + 2, h + 2);
+  cx.strokeRect(BX - 1.5, BY - 1.5, w + 3, h + 3);
+  cx.restore();
+  cx.strokeStyle = hot ? 'rgba(255,90,110,0.20)' : 'rgba(62,155,255,0.18)';   // a faded outer echo
+  cx.lineWidth = 1;
+  cx.strokeRect(BX - 6.5, BY - 6.5, w + 13, h + 13);
+  cx.strokeStyle = hot ? 'rgba(255,170,185,0.95)' : 'rgba(190,225,255,0.9)';  // corner brackets
+  cx.lineWidth = 2;
+  cx.beginPath();
+  const cl = 14;
+  cx.moveTo(BX - 6, BY - 6 + cl); cx.lineTo(BX - 6, BY - 6); cx.lineTo(BX - 6 + cl, BY - 6);
+  cx.moveTo(BX + w + 6 - cl, BY - 6); cx.lineTo(BX + w + 6, BY - 6); cx.lineTo(BX + w + 6, BY - 6 + cl);
+  cx.moveTo(BX - 6, BY + h + 6 - cl); cx.lineTo(BX - 6, BY + h + 6); cx.lineTo(BX - 6 + cl, BY + h + 6);
+  cx.moveTo(BX + w + 6 - cl, BY + h + 6); cx.lineTo(BX + w + 6, BY + h + 6); cx.lineTo(BX + w + 6, BY + h + 6 - cl);
+  cx.stroke();
   cx.restore();
 }
 function drawMini(kind, cxp, cyp, scale, alpha) {
@@ -1142,22 +1252,32 @@ function drawMini(kind, cxp, cyp, scale, alpha) {
   for (const [x, y] of cells) {
     const px = ox + x * s, py = oy + y * s;
     cx.globalAlpha = alpha === undefined ? 1 : alpha;
-    cx.fillStyle = '#0a0f1a'; cx.fillRect(px + 1, py + 1, s - 2, s - 2);
-    cx.fillStyle = COL[kind]; cx.globalAlpha = (alpha === undefined ? 1 : alpha) * 0.22;
-    cx.fillRect(px + 1, py + 1, s - 2, s - 2);
+    cx.fillStyle = shade(COL[kind], 0.30); cx.fillRect(px + 1, py + 1, s - 2, s - 2);
+    cx.fillStyle = shade(COL[kind], 1.3); cx.globalAlpha = (alpha === undefined ? 1 : alpha) * 0.5;
+    cx.fillRect(px + 2, py + 2, s - 4, 1.5);
     cx.globalAlpha = alpha === undefined ? 1 : alpha;
     cx.strokeStyle = COL[kind]; cx.lineWidth = 1.6;
     cx.strokeRect(px + 2, py + 2, s - 4, s - 4);
     cx.globalAlpha = 1;
   }
 }
-function panelBox(x, y, w, h, title) {
-  cx.fillStyle = '#070c16'; cx.fillRect(x, y, w, h);
-  cx.strokeStyle = '#1d3350'; cx.lineWidth = 1;
+function panelBox(x, y, w, h, title, accent) {
+  const g = cx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, 'rgba(12,20,38,0.94)');
+  g.addColorStop(1, 'rgba(5,9,18,0.94)');
+  cx.fillStyle = g; cx.fillRect(x, y, w, h);
+  cx.fillStyle = 'rgba(130,190,255,0.12)';         // a lit top edge gives the plate a face
+  cx.fillRect(x + 1, y + 1, w - 2, 1);
+  cx.strokeStyle = 'rgba(60,100,160,0.45)'; cx.lineWidth = 1;
   cx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   if (title) {
-    cx.fillStyle = '#6f8fb8'; cx.font = '10px monospace'; cx.textAlign = 'left';
-    cx.fillText(title, x + 8, y + 14);
+    cx.fillStyle = accent || '#3e9bff'; cx.globalAlpha = 0.9;
+    cx.fillRect(x + 8, y + 7, 3, 9);               // accent tick names the panel's colour
+    cx.globalAlpha = 1;
+    cx.fillStyle = '#7f9dc0'; cx.font = 'bold 10px ' + MONO; cx.textAlign = 'left';
+    cx.letterSpacing = '2px';
+    cx.fillText(title, x + 17, y + 15);
+    cx.letterSpacing = '0px';
   }
 }
 function fmtTime(t) {
@@ -1169,51 +1289,61 @@ function fmtTime(t) {
 function drawHUD() {
   cx.textAlign = 'left';
   // ---- hold, with an honest locked state ----
-  panelBox(LX, BY, LW, 120, TOUCH ? 'HOLD  [swipe ↑]' : 'HOLD  [C]');
+  panelBox(LX, BY, LW, 120, TOUCH ? 'HOLD  [swipe ↑]' : 'HOLD  [C]', '#b23dff');
   if (G.hold) {
     drawMini(G.hold, LX + LW / 2, BY + 72, 0.66, G.holdUsed ? 0.28 : 1);
     if (G.holdUsed) {
-      cx.fillStyle = '#5d7c9e'; cx.font = 'bold 9px monospace'; cx.textAlign = 'center';
+      cx.fillStyle = '#5d7c9e'; cx.font = 'bold 9px ' + MONO; cx.textAlign = 'center';
       cx.fillText('LOCKED UNTIL DROP', LX + LW / 2, BY + 112); cx.textAlign = 'left';
     }
   } else {
-    cx.fillStyle = '#2b3c54'; cx.font = '11px monospace'; cx.textAlign = 'center';
+    cx.fillStyle = '#2b3c54'; cx.font = '11px ' + MONO; cx.textAlign = 'center';
     cx.fillText('empty', LX + LW / 2, BY + 76); cx.textAlign = 'left';
   }
   // ---- score, dominant ----
-  panelBox(LX, BY + 132, LW, 286, 'PROGRESS');
+  panelBox(LX, BY + 132, LW, 286, 'PROGRESS', '#3ef0ff');
   cx.save();
-  cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 14;
-  cx.fillStyle = '#7ff4ff'; cx.font = 'bold 34px monospace'; cx.textAlign = 'right';
+  cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 22;
+  cx.fillStyle = '#5ee8ff'; cx.font = 'bold 34px ' + MONO; cx.textAlign = 'right';
+  cx.fillText(String(Math.floor(G.shownScore)), LX + LW - 14, BY + 176);
+  cx.shadowBlur = 4; cx.fillStyle = '#eafcff';
   cx.fillText(String(Math.floor(G.shownScore)), LX + LW - 14, BY + 176);
   cx.restore();
-  cx.fillStyle = '#5d7c9e'; cx.font = '9px monospace'; cx.textAlign = 'left';
+  cx.fillStyle = '#5d7c9e'; cx.font = '9px ' + MONO; cx.textAlign = 'left';
   cx.fillText('SCORE', LX + 14, BY + 176);
   const rows = [['LINES', String(G.lines)], ['LEVEL', String(G.level)], ['PIECES', String(G.pieces)],
   ['TETRIS', String(G.tetrises)], ['T-SPIN', String(G.tspins)]];
   let ry = BY + 210;
   for (const [k, v] of rows) {
-    cx.fillStyle = '#5d7c9e'; cx.font = '10px monospace'; cx.textAlign = 'left';
+    cx.fillStyle = '#5d7c9e'; cx.font = '10px ' + MONO; cx.textAlign = 'left';
     cx.fillText(k, LX + 14, ry);
     cx.fillStyle = v === '0' ? '#5d7c9e' : '#cfe6ff';
-    cx.font = '13px monospace'; cx.textAlign = 'right';
+    cx.font = '13px ' + MONO; cx.textAlign = 'right';
     cx.fillText(v, LX + LW - 14, ry);
     ry += 30;
   }
   const into = G.lines % 10;
   cx.fillStyle = '#0d1626'; cx.fillRect(LX + 14, BY + 372, LW - 28, 7);
-  cx.fillStyle = '#3ef0ff'; cx.fillRect(LX + 14, BY + 372, (LW - 28) * (into / 10), 7);
-  cx.fillStyle = '#7f9dc0'; cx.font = '10px monospace'; cx.textAlign = 'left';
+  const bw2 = (LW - 28) * (into / 10);
+  if (bw2 > 0) {
+    const bg2 = cx.createLinearGradient(LX + 14, 0, LX + 14 + bw2, 0);
+    bg2.addColorStop(0, '#1a7f97'); bg2.addColorStop(1, '#3ef0ff');
+    cx.fillStyle = bg2; cx.fillRect(LX + 14, BY + 372, bw2, 7);
+    cx.save(); cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 8;
+    cx.fillStyle = '#bff8ff'; cx.fillRect(LX + 12 + bw2, BY + 371, 2, 9);
+    cx.restore();
+  }
+  cx.fillStyle = '#7f9dc0'; cx.font = '10px ' + MONO; cx.textAlign = 'left';
   cx.fillText((10 - into) + ' LINES TO LEVEL ' + (G.level + 1), LX + 14, BY + 396);
   // ---- streak: always reserved, never reflows ----
-  panelBox(LX, BY + 430, LW, 72, 'STREAK');
-  cx.font = 'bold 12px monospace';
+  panelBox(LX, BY + 430, LW, 72, 'STREAK', '#ffe14a');
+  cx.font = 'bold 12px ' + MONO;
   cx.fillStyle = G.combo > 0 ? '#ffe14a' : '#243449';
   cx.fillText(G.combo > 0 ? G.combo + ' COMBO' : 'no combo', LX + 14, BY + 460);
   cx.fillStyle = G.b2b ? '#b23dff' : '#243449';
   cx.fillText(G.b2b ? 'BACK-TO-BACK ARMED' : 'no back-to-back', LX + 14, BY + 484);
   // ---- the clock that makes PIECES mean something ----
-  panelBox(LX, BY + 514, LW, RAIL - (BY + 514), 'RUN');
+  panelBox(LX, BY + 514, LW, RAIL - (BY + 514), 'RUN', '#3eff6e');
   const el = G.elapsed;
   const timed = el >= 0.5;
   const stats = timed
@@ -1221,14 +1351,14 @@ function drawHUD() {
     : [['TIME', '\u2014'], ['PPS', '\u2014'], ['LPM', '\u2014']];
   let tx = LX + 14;
   for (const [k, v] of stats) {
-    cx.fillStyle = '#5d7c9e'; cx.font = '9px monospace'; cx.textAlign = 'left';
+    cx.fillStyle = '#5d7c9e'; cx.font = '9px ' + MONO; cx.textAlign = 'left';
     cx.fillText(k, tx, BY + 542);
-    cx.fillStyle = '#cfe6ff'; cx.font = 'bold 13px monospace';
+    cx.fillStyle = '#cfe6ff'; cx.font = 'bold 13px ' + MONO;
     cx.fillText(v, tx, BY + 562);
     tx += 84;
   }
   // ---- next ----
-  panelBox(RX, BY, RW, 360, 'NEXT');
+  panelBox(RX, BY, RW, 360, 'NEXT', '#3ef0ff');
   for (let i = 0; i < 5 && i < G.queue.length; i++) {
     if (i === 0) {
       cx.fillStyle = 'rgba(62,240,255,0.06)'; cx.fillRect(RX + 8, BY + 24, RW - 16, 74);
@@ -1237,7 +1367,7 @@ function drawHUD() {
     drawMini(G.queue[i], RX + RW / 2, BY + (i === 0 ? 61 : 61 + 22 + i * 62), i === 0 ? 0.72 : 0.5, i === 0 ? 1 : 0.62 - i * 0.07);
   }
   // ---- controls ----
-  panelBox(RX, BY + 372, RW, RAIL - (BY + 372), 'CONTROLS');
+  panelBox(RX, BY + 372, RW, RAIL - (BY + 372), 'CONTROLS', '#2a4a72');
   const help = TOUCH
     ? [['drag \u2190\u2192', 'move'], ['drag \u2193', 'soft drop'], ['flick \u2193', 'hard drop'],
     ['tap', 'rotate CW'], ['tap left \u2153', 'rotate CCW'], ['swipe \u2191', 'hold']]
@@ -1245,9 +1375,9 @@ function drawHUD() {
     ['Z', 'rotate CCW'], ['C', 'hold'], ['P', 'pause'], ['R', 'restart'], ['M', 'mute' + (G.muted ? ' (ON)' : '')]];
   let hy = BY + 396;
   for (const [k, v] of help) {
-    cx.fillStyle = '#7fd0ff'; cx.font = 'bold 10px monospace'; cx.textAlign = 'right';
+    cx.fillStyle = '#4f89b8'; cx.font = 'bold 10px ' + MONO; cx.textAlign = 'right';
     cx.fillText(k, RX + 72, hy);
-    cx.fillStyle = '#5d7c9e'; cx.font = '10px monospace'; cx.textAlign = 'left';
+    cx.fillStyle = '#43587a'; cx.font = '10px ' + MONO; cx.textAlign = 'left';
     cx.fillText(v, RX + 84, hy);
     hy += 22;
   }
@@ -1267,7 +1397,7 @@ function drawBanner() {
   cx.globalAlpha = al;
   let fs = Math.round((b.big ? 15 : 11) + (b.big ? 17 : 7) * grow);
   const maxW = W * CELL - 14;
-  do { cx.font = 'bold ' + fs + 'px monospace'; fs -= 1; } while (cx.measureText(label).width > maxW && fs > 8);
+  do { cx.font = 'bold ' + fs + 'px ' + MONO; fs -= 1; } while (cx.measureText(label).width > maxW && fs > 8);
   const tw = cx.measureText(label).width;
   const plate = cx.createLinearGradient(cxx - tw, 0, cxx + tw, 0);   // a plate, so the stack never wins
   plate.addColorStop(0, 'rgba(4,7,14,0)');
@@ -1279,17 +1409,37 @@ function drawBanner() {
   cx.fillStyle = b.col;
   cx.textAlign = 'center';
   cx.fillText(label, cxx, cyy);
-  if (b.big) {                                    // a ring for the moments that deserve one
+  if (b.big) {                                    // a shockwave for the moments that deserve one
     const r = 40 + age * 620;
-    cx.globalAlpha = al * Math.max(0, 1 - age / 0.55);
+    const fade = Math.max(0, 1 - age / 0.55);
+    cx.shadowColor = b.col; cx.shadowBlur = 18 * fade;
+    cx.globalAlpha = al * fade;
     cx.strokeStyle = b.col; cx.lineWidth = Math.max(1, 11 - age * 18);
     cx.beginPath(); cx.arc(cxx, BY + 300, r, 0, 7); cx.stroke();
+    cx.globalAlpha = al * fade * 0.45;             // a trailing echo ring
+    cx.lineWidth = 2;
+    cx.beginPath(); cx.arc(cxx, BY + 300, r * 0.68, 0, 7); cx.stroke();
+    cx.shadowBlur = 0;
+    cx.globalAlpha = al * fade * 0.8;              // radial burst rays
+    cx.lineWidth = 1.5;
+    cx.beginPath();
+    for (let i = 0; i < 12; i++) {
+      const ra = i / 12 * 6.283 + 0.26;
+      const r0 = r * 0.72, r1 = r0 + 14 + r * 0.16;
+      cx.moveTo(cxx + Math.cos(ra) * r0, BY + 300 + Math.sin(ra) * r0);
+      cx.lineTo(cxx + Math.cos(ra) * r1, BY + 300 + Math.sin(ra) * r1);
+    }
+    cx.stroke();
   }
   cx.restore();
   cx.textAlign = 'left';
 }
 function drawTitle() {
-  cx.fillStyle = '#02040a'; cx.fillRect(0, 0, 1280, 720);
+  const bg = cx.createLinearGradient(0, 0, 0, 720);
+  bg.addColorStop(0, '#060a18'); bg.addColorStop(0.65, '#02040a'); bg.addColorStop(1, '#010206');
+  cx.fillStyle = bg; cx.fillRect(0, 0, 1280, 720);
+  drawStars();
+  drawFloor(592);
   // drifting tetrominoes
   const kinds = KINDS;
   for (let i = 0; i < 22; i++) {
@@ -1309,19 +1459,48 @@ function drawTitle() {
   scrim.addColorStop(1, 'rgba(2,4,10,0)');
   cx.fillStyle = scrim; cx.fillRect(0, 0, 1280, 720);
   cx.textAlign = 'center';
+  // the wordmark: chromatic ghosts under a gradient face under a hot core
   cx.save();
-  cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 28;
-  cx.fillStyle = '#aef6ff'; cx.font = 'bold 82px monospace';
+  cx.font = 'bold 84px ' + MONO;
+  cx.letterSpacing = '6px';
+  cx.globalAlpha = 0.4;
+  cx.fillStyle = '#ff3355'; cx.fillText('NEOTRIS', 636, 297);
+  cx.fillStyle = '#b23dff'; cx.fillText('NEOTRIS', 644, 303);
+  cx.globalAlpha = 1;
+  cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 34;
+  const wm = cx.createLinearGradient(0, 232, 0, 302);
+  wm.addColorStop(0, '#f2ffff'); wm.addColorStop(0.55, '#9df2ff'); wm.addColorStop(1, '#3ecbe8');
+  cx.fillStyle = wm; cx.fillText('NEOTRIS', 640, 300);
+  cx.shadowBlur = 8; cx.fillStyle = 'rgba(255,255,255,0.55)';
   cx.fillText('NEOTRIS', 640, 300);
+  cx.restore();
+  cx.letterSpacing = '0px';
+  // an energy rule under the name, bright at the centre
+  const rule = cx.createLinearGradient(340, 0, 940, 0);
+  rule.addColorStop(0, 'rgba(62,240,255,0)');
+  rule.addColorStop(0.5, 'rgba(62,240,255,0.85)');
+  rule.addColorStop(1, 'rgba(62,240,255,0)');
+  cx.save();
+  cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 10;
+  cx.fillStyle = rule; cx.fillRect(340, 326, 600, 2);
   cx.restore();
   // a row of the seven pieces, in canon colours
   for (let i = 0; i < 7; i++) drawMini(KINDS[i], 340 + i * 100, 388, 0.5);
-  cx.fillStyle = '#6f8fb8'; cx.font = '14px monospace';
-  cx.fillText('seven pieces, one well, no mercy — a Tetris tribute', 640, 460);
+  cx.fillStyle = '#7f9dc0'; cx.font = '14px ' + MONO;
+  cx.letterSpacing = '1px';
+  cx.fillText('seven pieces, one well, no mercy — a Tetris tribute', 640, 452);
+  cx.letterSpacing = '0px';
   if (!G.shotMode) {
-    cx.fillStyle = '#e6f8ff'; cx.font = 'bold 15px monospace';
+    const pulse = 0.72 + 0.28 * Math.sin(G.time * 2.6);
+    cx.save();
+    cx.globalAlpha = pulse;
+    cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 12;
+    cx.fillStyle = '#e6f8ff'; cx.font = 'bold 16px ' + MONO;
+    cx.letterSpacing = '3px';
     cx.fillText(TOUCH ? 'TAP TO START' : 'PRESS SPACE', 640, 528);
-    cx.fillStyle = '#5d7c9e'; cx.font = '12px monospace';
+    cx.restore();
+    cx.letterSpacing = '0px';
+    cx.fillStyle = '#4e6a8c'; cx.font = '12px ' + MONO;
     cx.fillText(TOUCH ? 'drag move · drag ↓ soft · flick ↓ hard drop · tap rotate · swipe ↑ hold'
       : '←→ move · ↓ soft · SPACE hard drop · ↑/X/Z rotate · C hold', 640, 562);
   }
@@ -1331,37 +1510,41 @@ function drawOver() {
   cx.fillStyle = 'rgba(2,5,10,0.88)'; cx.fillRect(0, 0, 1280, 720);
   cx.textAlign = 'center';
   cx.save();
-  cx.shadowColor = '#ff4a6e'; cx.shadowBlur = 30;
-  cx.fillStyle = '#ff8a9d'; cx.font = 'bold 58px monospace';
+  cx.shadowColor = '#ff4a6e'; cx.shadowBlur = 34;
+  cx.font = 'bold 58px ' + MONO; cx.letterSpacing = '3px';
+  cx.fillStyle = '#ff8a9d';
+  cx.fillText('THE WELL IS FULL', 640, 286);
+  cx.shadowBlur = 6; cx.fillStyle = '#ffd9e0';
   cx.fillText('THE WELL IS FULL', 640, 286);
   cx.restore();
+  cx.letterSpacing = '0px';
   cx.save();
   cx.shadowColor = '#3ef0ff'; cx.shadowBlur = 18;
-  cx.fillStyle = '#7ff4ff'; cx.font = 'bold 40px monospace';
+  cx.fillStyle = '#7ff4ff'; cx.font = 'bold 40px ' + MONO;
   cx.fillText(G.score.toLocaleString(), 640, 350);
   cx.restore();
-  cx.fillStyle = '#5d7c9e'; cx.font = '11px monospace';
+  cx.fillStyle = '#5d7c9e'; cx.font = '11px ' + MONO;
   cx.fillText('POINTS', 640, 372);
-  cx.fillStyle = '#8fa8c8'; cx.font = '14px monospace';
+  cx.fillStyle = '#8fa8c8'; cx.font = '14px ' + MONO;
   cx.fillText(G.lines + ' LINES  \u00b7  LEVEL ' + G.level + '  \u00b7  ' + G.pieces + ' PIECES  \u00b7  ' +
     G.tetrises + ' TETRISES  \u00b7  ' + G.tspins + ' T-SPINS', 640, 404);
   if (G.elapsed >= 0.5) {
-    cx.fillStyle = '#5d7c9e'; cx.font = '12px monospace';
+    cx.fillStyle = '#5d7c9e'; cx.font = '12px ' + MONO;
     cx.fillText(fmtTime(G.elapsed) + '  \u00b7  ' + (G.pieces / G.elapsed).toFixed(2) + ' PPS', 640, 430);
   }
   const bw = 300, bx0 = 640 - bw / 2;
   cx.strokeStyle = '#3ef0ff'; cx.lineWidth = 1.5;
   cx.strokeRect(bx0 + 0.5, 466.5, bw, 38);
-  cx.fillStyle = '#3ef0ff'; cx.font = 'bold 13px monospace';
+  cx.fillStyle = '#3ef0ff'; cx.font = 'bold 13px ' + MONO;
   cx.fillText(TOUCH ? 'TAP FOR A FRESH WELL' : '[SPACE] A FRESH WELL', 640, 491);
   cx.textAlign = 'left';
 }
 function drawPaused() {
   cx.fillStyle = 'rgba(2,5,10,0.8)'; cx.fillRect(BX - 2, BY - 2, W * CELL + 4, (H - HIDDEN) * CELL + 4);
   cx.textAlign = 'center';
-  cx.fillStyle = '#3ef0ff'; cx.font = 'bold 30px monospace';
+  cx.fillStyle = '#3ef0ff'; cx.font = 'bold 30px ' + MONO;
   cx.fillText('PAUSED', BX + W * CELL / 2, BY + 290);
-  cx.fillStyle = '#6f8fb8'; cx.font = '12px monospace';
+  cx.fillStyle = '#6f8fb8'; cx.font = '12px ' + MONO;
   cx.fillText('[P] resume', BX + W * CELL / 2, BY + 320);
   cx.textAlign = 'left';
 }
@@ -1376,7 +1559,7 @@ function draw() {
   if (G.staged && G.shotMode) {
     cx.save();
     cx.fillStyle = '#ffd34a'; cx.globalAlpha = 0.75;
-    cx.font = 'bold 11px monospace'; cx.textAlign = 'center';
+    cx.font = 'bold 11px ' + MONO; cx.textAlign = 'center';
     cx.fillText('STAGED POSITION \u2014 hand-built board, not bot play', 640, 706);
     cx.restore();
     cx.textAlign = 'left';
@@ -1404,16 +1587,25 @@ function present() {
   drawPortraitHUD();
 }
 function drawPortraitHUD() {
+  const pg = vx.createLinearGradient(0, 0, 0, 168);
+  pg.addColorStop(0, 'rgba(12,20,38,0.9)');
+  pg.addColorStop(1, 'rgba(2,4,10,0)');
+  vx.fillStyle = pg; vx.fillRect(0, 0, PW, 168);
+  vx.fillStyle = 'rgba(80,150,230,0.25)'; vx.fillRect(0, 166, PW, 1);
   vx.save();
-  vx.shadowColor = '#3ef0ff'; vx.shadowBlur = 14;
-  vx.fillStyle = '#7ff4ff'; vx.font = 'bold 46px monospace'; vx.textAlign = 'left';
+  vx.shadowColor = '#3ef0ff'; vx.shadowBlur = 18;
+  vx.fillStyle = '#5ee8ff'; vx.font = 'bold 46px ' + MONO; vx.textAlign = 'left';
+  vx.fillText(String(Math.floor(G.shownScore)), 26, 92);
+  vx.shadowBlur = 4; vx.fillStyle = '#eafcff';
   vx.fillText(String(Math.floor(G.shownScore)), 26, 92);
   vx.restore();
-  vx.fillStyle = '#5d7c9e'; vx.font = '15px monospace'; vx.textAlign = 'left';
+  vx.fillStyle = '#5d7c9e'; vx.font = 'bold 14px ' + MONO; vx.textAlign = 'left';
+  vx.letterSpacing = '2px';
   vx.fillText('SCORE', 26, 40);
   vx.fillText('HOLD', 400, 40);
   vx.fillText('NEXT', 545, 40);
-  vx.fillStyle = '#8fa8c8'; vx.font = '17px monospace';
+  vx.letterSpacing = '0px';
+  vx.fillStyle = '#8fa8c8'; vx.font = '17px ' + MONO;
   vx.fillText('LINES ' + G.lines + '   LEVEL ' + G.level, 26, 140);
   const oc = cx; cx = vx;                        // drawMini paints through cx
   if (G.hold) drawMini(G.hold, 428, 95, 0.62, G.holdUsed ? 0.28 : 1);
