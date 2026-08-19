@@ -103,7 +103,8 @@ function spawnNext(forced) {
   if (!fits(p.kind, p.rot, p.x, p.y)) { G.piece = null; topOut(); return false; }
   return true;
 }
-function topOut() { G.over = true; G.screen = 'over'; G.banner = null; if (G.score > G.best) G.best = G.score; }
+let overAt = 0;
+function topOut() { G.over = true; G.screen = 'over'; G.banner = null; overAt = Date.now(); if (G.score > G.best) G.best = G.score; }
 function bestOf(g) { return g && g.best || 0; }
 function ghostY() {
   const p = G.piece; if (!p) return 0;
@@ -908,7 +909,10 @@ function runVerify(mode) {
 // ------------------------------ rendering ------------------------------
 const CELL = 30, BX = 490, BY = 54;   // 10x20 well, centred
 const LX = 180, LW = 260, RX = 840, RW = 260, RAIL = 654;
-let cv, cx;
+// portrait: the 1280x720 scene renders untouched; present() recomposes it upright
+const PW = 720, PH = 1280, PSCALE = 1.7;
+const PWX = (PW - (W * CELL + 20) * PSCALE) / 2, PWY = 196;
+let cv, cx, vx, scene;
 
 function shakeXY() {
   if (G.shake <= 0 || G.shotMode) return [0, 0];
@@ -1165,7 +1169,7 @@ function fmtTime(t) {
 function drawHUD() {
   cx.textAlign = 'left';
   // ---- hold, with an honest locked state ----
-  panelBox(LX, BY, LW, 120, 'HOLD  [C]');
+  panelBox(LX, BY, LW, 120, TOUCH ? 'HOLD  [swipe ↑]' : 'HOLD  [C]');
   if (G.hold) {
     drawMini(G.hold, LX + LW / 2, BY + 72, 0.66, G.holdUsed ? 0.28 : 1);
     if (G.holdUsed) {
@@ -1234,8 +1238,11 @@ function drawHUD() {
   }
   // ---- controls ----
   panelBox(RX, BY + 372, RW, RAIL - (BY + 372), 'CONTROLS');
-  const help = [['\u2190 \u2192', 'move'], ['\u2193', 'soft drop'], ['SPACE', 'hard drop'], ['\u2191 / X', 'rotate CW'],
-  ['Z', 'rotate CCW'], ['C', 'hold'], ['P', 'pause'], ['R', 'restart'], ['M', 'mute' + (G.muted ? ' (ON)' : '')]];
+  const help = TOUCH
+    ? [['drag \u2190\u2192', 'move'], ['drag \u2193', 'soft drop'], ['flick \u2193', 'hard drop'],
+    ['tap', 'rotate CW'], ['tap left \u2153', 'rotate CCW'], ['swipe \u2191', 'hold']]
+    : [['\u2190 \u2192', 'move'], ['\u2193', 'soft drop'], ['SPACE', 'hard drop'], ['\u2191 / X', 'rotate CW'],
+    ['Z', 'rotate CCW'], ['C', 'hold'], ['P', 'pause'], ['R', 'restart'], ['M', 'mute' + (G.muted ? ' (ON)' : '')]];
   let hy = BY + 396;
   for (const [k, v] of help) {
     cx.fillStyle = '#7fd0ff'; cx.font = 'bold 10px monospace'; cx.textAlign = 'right';
@@ -1313,9 +1320,10 @@ function drawTitle() {
   cx.fillText('seven pieces, one well, no mercy — a Tetris tribute', 640, 460);
   if (!G.shotMode) {
     cx.fillStyle = '#e6f8ff'; cx.font = 'bold 15px monospace';
-    cx.fillText('PRESS SPACE', 640, 528);
+    cx.fillText(TOUCH ? 'TAP TO START' : 'PRESS SPACE', 640, 528);
     cx.fillStyle = '#5d7c9e'; cx.font = '12px monospace';
-    cx.fillText('←→ move · ↓ soft · SPACE hard drop · ↑/X/Z rotate · C hold', 640, 562);
+    cx.fillText(TOUCH ? 'drag move · drag ↓ soft · flick ↓ hard drop · tap rotate · swipe ↑ hold'
+      : '←→ move · ↓ soft · SPACE hard drop · ↑/X/Z rotate · C hold', 640, 562);
   }
   cx.textAlign = 'left';
 }
@@ -1345,7 +1353,7 @@ function drawOver() {
   cx.strokeStyle = '#3ef0ff'; cx.lineWidth = 1.5;
   cx.strokeRect(bx0 + 0.5, 466.5, bw, 38);
   cx.fillStyle = '#3ef0ff'; cx.font = 'bold 13px monospace';
-  cx.fillText('[SPACE] A FRESH WELL', 640, 491);
+  cx.fillText(TOUCH ? 'TAP FOR A FRESH WELL' : '[SPACE] A FRESH WELL', 640, 491);
   cx.textAlign = 'left';
 }
 function drawPaused() {
@@ -1360,7 +1368,7 @@ function drawPaused() {
 function draw() {
   if (!cv) return;
   cx.fillStyle = '#02040a'; cx.fillRect(0, 0, 1280, 720);
-  if (G.screen === 'title') { drawTitle(); return; }
+  if (G.screen === 'title') { drawTitle(); present(); return; }
   drawBackdrop();
   drawWell();
   drawHUD();
@@ -1375,6 +1383,43 @@ function draw() {
   }
   if (G.screen === 'paused') drawPaused();
   if (G.screen === 'over') drawOver();
+  present();
+}
+// the scene canvas is landscape; a phone held upright gets the well scaled up
+// plus a compact HUD strip, all recomposed from the same untouched frame
+function fit() {
+  const portrait = window.innerHeight > window.innerWidth;
+  const w = portrait ? PW : 1280, h = portrait ? PH : 720;
+  if (cv.width !== w) { cv.width = w; cv.height = h; }
+}
+function present() {
+  if (cv.width !== PW) { vx.drawImage(scene, 0, 0); return; }
+  vx.fillStyle = '#02040a'; vx.fillRect(0, 0, PW, PH);
+  if (G.screen === 'title' || G.screen === 'over') {
+    vx.drawImage(scene, 280, 0, 720, 720, 0, (PH - 720) / 2, 720, 720);
+    return;
+  }
+  const ww = W * CELL + 20, wh = (H - HIDDEN) * CELL + 20;
+  vx.drawImage(scene, BX - 10, BY - 10, ww, wh, PWX, PWY, ww * PSCALE, wh * PSCALE);
+  drawPortraitHUD();
+}
+function drawPortraitHUD() {
+  vx.save();
+  vx.shadowColor = '#3ef0ff'; vx.shadowBlur = 14;
+  vx.fillStyle = '#7ff4ff'; vx.font = 'bold 46px monospace'; vx.textAlign = 'left';
+  vx.fillText(String(Math.floor(G.shownScore)), 26, 92);
+  vx.restore();
+  vx.fillStyle = '#5d7c9e'; vx.font = '15px monospace'; vx.textAlign = 'left';
+  vx.fillText('SCORE', 26, 40);
+  vx.fillText('HOLD', 400, 40);
+  vx.fillText('NEXT', 545, 40);
+  vx.fillStyle = '#8fa8c8'; vx.font = '17px monospace';
+  vx.fillText('LINES ' + G.lines + '   LEVEL ' + G.level, 26, 140);
+  const oc = cx; cx = vx;                        // drawMini paints through cx
+  if (G.hold) drawMini(G.hold, 428, 95, 0.62, G.holdUsed ? 0.28 : 1);
+  if (G.queue[0]) drawMini(G.queue[0], 578, 95, 0.78);
+  if (G.queue[1]) drawMini(G.queue[1], 668, 95, 0.5, 0.6);
+  cx = oc;
 }
 
 // ------------------------------ audio ------------------------------
@@ -1392,9 +1437,17 @@ function beep(f, d, type, delay) {
     o.start(t0); o.stop(t0 + d);
   } catch (e) { }
 }
+// mobile browsers gate audio behind a user gesture: create/resume on the first one
+function unlockAudio() {
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === 'suspended') AC.resume();
+  } catch (e) { }
+}
 
 // ------------------------------ input ------------------------------
 function onKey(e) {
+  unlockAudio();
   const k = e.key;
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].indexOf(k) >= 0) e.preventDefault();
   if (G.screen === 'title') {
@@ -1425,6 +1478,69 @@ function onKeyUp(e) {
   if (k === 'ArrowLeft' && G.das.dir === -1) G.das.dir = 0;
   if (k === 'ArrowRight' && G.das.dir === 1) G.das.dir = 0;
   if (k === 'ArrowDown') G.softing = false;
+}
+
+// ------------------------------ touch ------------------------------
+// gestures land on the same actions the keyboard calls: drag = move,
+// drag down = soft drop, flick down = hard drop, swipe up = hold,
+// tap = rotate CW (tap in the left third = CCW)
+const TOUCH = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+let TS = null;
+function cellPx() {                                // one well cell, in screen pixels
+  const r = cv.getBoundingClientRect();
+  return CELL * (cv.width === PW ? PSCALE : 1) * (r.width / cv.width);
+}
+function touchBy(e, id) {
+  for (let i = 0; i < e.changedTouches.length; i++)
+    if (e.changedTouches[i].identifier === id) return e.changedTouches[i];
+  return null;
+}
+function onTouchStart(e) {
+  e.preventDefault();
+  unlockAudio();
+  if (G.screen === 'title') { newGame(URLSEED); beep(440, 0.1); return; }
+  if (G.screen === 'over') {                       // a beat, so taps cannot skip the score
+    if (Date.now() - overAt > 500) { newGame(G.seed + 1); beep(440, 0.1); }
+    return;
+  }
+  if (TS) return;                                  // one steering finger at a time
+  const t = e.changedTouches[0];
+  TS = { id: t.identifier, x0: t.clientX, y0: t.clientY, t0: performance.now(), mode: '', steps: 0 };
+}
+function onTouchMove(e) {
+  e.preventDefault();
+  if (!TS || G.screen !== 'play') return;
+  const t = touchBy(e, TS.id);
+  if (!t) return;
+  const c = cellPx(), dx = t.clientX - TS.x0, dy = t.clientY - TS.y0;
+  if (!TS.mode) {
+    if (Math.abs(dx) > c * 0.55 && Math.abs(dx) > Math.abs(dy)) TS.mode = 'h';
+    else if (dy > c * 0.55 && dy > Math.abs(dx)) TS.mode = 'v';
+    else if (dy < -c * 1.1) TS.mode = 'u';
+  }
+  if (TS.mode === 'h') {                           // one cell per cell-width dragged
+    const want = Math.round(dx / c);
+    while (TS.steps < want) { if (!move(1)) break; TS.steps++; beep(200, 0.02); }
+    while (TS.steps > want) { if (!move(-1)) break; TS.steps--; beep(200, 0.02); }
+  } else if (TS.mode === 'v') {
+    const want = Math.round(dy / c);
+    while (TS.steps < want) { if (!softDrop()) break; TS.steps++; }
+  }
+}
+function onTouchEnd(e) {
+  e.preventDefault();
+  if (!TS) return;
+  const t = touchBy(e, TS.id);
+  if (!t) return;
+  const s = TS; TS = null;
+  if (G.screen !== 'play') return;
+  const c = cellPx(), dx = t.clientX - s.x0, dy = t.clientY - s.y0;
+  const dt = performance.now() - s.t0;
+  if (!s.mode && dt < 300 && Math.abs(dx) < c * 0.5 && Math.abs(dy) < c * 0.5) {
+    const r = cv.getBoundingClientRect();
+    if (rotate(t.clientX - r.left < r.width / 3 ? -1 : 1)) beep(300, 0.03);
+  } else if (s.mode === 'v' && dt < 260 && dy > c * 1.6) { hardDrop(); beep(150, 0.06); }
+  else if (s.mode === 'u' && dy < -c) { if (holdPiece()) beep(420, 0.04); }
 }
 
 // ------------------------------ shots ------------------------------
@@ -1545,7 +1661,10 @@ const QS = new URLSearchParams(location.search);
 const URLSEED = +(QS.get('seed') || RUN_SEED) || RUN_SEED;
 function boot() {
   cv = document.getElementById('cv');
-  cx = cv.getContext('2d');
+  scene = document.createElement('canvas');       // the game always paints landscape here
+  scene.width = 1280; scene.height = 720;
+  cx = scene.getContext('2d');
+  vx = cv.getContext('2d');
   const verify = QS.get('verify');
   const shot = QS.get('shot');
   if (verify) {
@@ -1566,12 +1685,19 @@ function boot() {
     }
     const ok = def.check();
     document.title = (ok ? 'shot-OK:' : 'shot-FAILED:') + shot;
+    fit();
     draw();
     return;
   }
   window.addEventListener('keydown', onKey);
   window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('resize', fit);
   cv.addEventListener('mousedown', () => { if (G.screen === 'title') newGame(URLSEED); else if (G.screen === 'over') newGame(G.seed + 1); });
+  cv.addEventListener('touchstart', onTouchStart, { passive: false });
+  cv.addEventListener('touchmove', onTouchMove, { passive: false });
+  cv.addEventListener('touchend', onTouchEnd, { passive: false });
+  cv.addEventListener('touchcancel', () => { TS = null; }, { passive: false });
+  fit();
   newGame(URLSEED);
   G.screen = 'title';
   let last = 0;
